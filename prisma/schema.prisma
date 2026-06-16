@@ -1,0 +1,236 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum SubscriptionTier {
+  FREE
+  STARTER
+  PRO
+  BUSINESS
+  ENTERPRISE
+}
+
+enum SongStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum Genre {
+  POP
+  RAP
+  ROCK
+  EDM
+  ARABIC
+  KHALEEJI
+  YEMENI
+  LOFI
+  CINEMATIC
+  ACOUSTIC
+}
+
+enum Mood {
+  HAPPY
+  SAD
+  EPIC
+  ROMANTIC
+  EMOTIONAL
+  MOTIVATIONAL
+}
+
+enum Language {
+  ARABIC
+  ENGLISH
+}
+
+enum VoiceType {
+  MALE
+  FEMALE
+}
+
+model User {
+  id                  String             @id @default(uuid())
+  email               String             @unique
+  emailVerified       DateTime?
+  password            String?
+  name                String?
+  avatar              String?
+  role                UserRole           @default(USER)
+  tier                SubscriptionTier   @default(FREE)
+  googleId            String?            @unique
+  credits             Int                @default(100)
+  totalSongsGenerated Int                @default(0)
+  isActive            Boolean            @default(true)
+  lastLoginAt         DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  songs               Song[]
+  subscriptions       Subscription[]
+  payments            Payment[]
+  apiKeys             ApiKey[]
+  sessions            Session[]
+  auditLogs           AuditLog[]
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  token        String   @unique
+  expiresAt    DateTime
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+  
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Song {
+  id            String      @id @default(uuid())
+  userId        String
+  title         String
+  lyrics        String?
+  genre         Genre       @default(POP)
+  mood          Mood        @default(HAPPY)
+  language      Language    @default(ENGLISH)
+  voiceType     VoiceType   @default(MALE)
+  duration      Int         @default(60)
+  status        SongStatus  @default(PENDING)
+  progress      Int         @default(0)
+  audioUrl      String?
+  waveformData  Json?
+  metadata      Json?
+  isPublic      Boolean     @default(false)
+  isFavorite    Boolean     @default(false)
+  errorMessage  String?
+  processingTime Int?
+  fileSize      Int?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobs          Job[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("songs")
+}
+
+model Job {
+  id            String    @id @default(uuid())
+  songId        String
+  type          String
+  status        String    @default("pending")
+  progress      Int       @default(0)
+  attempts      Int       @default(0)
+  maxAttempts   Int       @default(3)
+  data          Json?
+  error         String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  song          Song      @relation(fields: [songId], references: [id], onDelete: Cascade)
+
+  @@index([songId])
+  @@index([status])
+  @@map("jobs")
+}
+
+model Subscription {
+  id              String           @id @default(uuid())
+  userId          String
+  tier            SubscriptionTier
+  status          String           @default("active")
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  canceledAt      DateTime?
+  provider        String
+  providerId      String?
+  providerData    Json?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+model Payment {
+  id              String    @id @default(uuid())
+  userId          String
+  amount          Float
+  currency        String    @default("USD")
+  status          String
+  provider        String
+  providerId      String?
+  description     String?
+  createdAt       DateTime  @default(now())
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("payments")
+}
+
+model ApiKey {
+  id            String    @id @default(uuid())
+  userId        String
+  name          String
+  key           String    @unique
+  lastUsedAt    DateTime?
+  expiresAt     DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([key])
+  @@index([userId])
+  @@map("api_keys")
+}
+
+model AuditLog {
+  id            String    @id @default(uuid())
+  userId        String?
+  action        String
+  entity        String?
+  entityId      String?
+  details       Json?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+
+  user          User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
