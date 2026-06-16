@@ -31,7 +31,9 @@ services:
       retries: 5
 
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       - DATABASE_URL=postgresql://melody:${DB_PASSWORD}@postgres:5432/melody_ai
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
