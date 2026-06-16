@@ -3,33 +3,12 @@ const nextConfig = {
   output: 'standalone',
   
   images: {
-    domains: [
-      'localhost',
-      'melody-ai.com',
-      'cdn.melody-ai.com',
-      'lh3.googleusercontent.com', // Google avatars
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: '**',
+      },
     ],
-  },
-
-  // API configuration
-  api: {
-    bodyParser: {
-      sizeLimit: '50mb', // For audio uploads
-    },
-    responseLimit: false,
-  },
-
-  // WebSocket support
-  webpack: (config, { isServer }) => {
-    if (!isServer) {
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        fs: false,
-        net: false,
-        tls: false,
-      };
-    }
-    return config;
   },
 
   // Security headers
@@ -43,6 +22,10 @@ const nextConfig = {
             value: 'on',
           },
           {
+            key: 'Strict-Transport-Security',
+            value: 'max-age=63072000; includeSubDomains; preload',
+          },
+          {
             key: 'X-XSS-Protection',
             value: '1; mode=block',
           },
@@ -54,20 +37,27 @@ const nextConfig = {
             key: 'X-Content-Type-Options',
             value: 'nosniff',
           },
+          {
+            key: 'Referrer-Policy',
+            value: 'strict-origin-when-cross-origin',
+          },
         ],
       },
     ];
   },
 
-  // Redirects
-  async redirects() {
-    return [
-      {
-        source: '/studio',
-        destination: '/studio/generate',
-        permanent: true,
-      },
-    ];
+  // Webpack config
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        net: false,
+        tls: false,
+        dns: false,
+      };
+    }
+    return config;
   },
 };
 
