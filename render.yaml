@@ -1,12 +1,10 @@
 services:
   - type: web
     name: melody-ai
-    env: node
-    buildCommand: |
-      npm ci
-      npx prisma generate
-      npm run build
-    startCommand: npm start
+    env: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
@@ -25,24 +23,6 @@ services:
         generateValue: true
       - key: NEXT_PUBLIC_APP_URL
         value: https://melody-ai.onrender.com
-    healthCheckPath: /api/health
-    autoDeploy: true
-
-  - type: worker
-    name: melody-ai-worker
-    env: node
-    buildCommand: npm ci
-    startCommand: npm run worker
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: melody-ai-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: melody-ai-redis
-          type: redis
-          property: connectionString
 
   - type: redis
     name: melody-ai-redis
