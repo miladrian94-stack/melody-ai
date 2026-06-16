@@ -1,8 +1,0 @@
-pandas
-pandas_ta
-yfinance
-schedule
-python-telegram-bot
-streamlit
-plotly
-scikit-learn
