@@ -1,16 +1,22 @@
 import { NextRequest } from 'next/server';
 import { Redis } from '@upstash/redis';
 
-// Use Upstash Redis for rate limiting in production
-// For development, we'll use an in-memory store
-const redis = new Redis({
-  url: process.env.REDIS_URL || '',
-  token: process.env.REDIS_TOKEN || '',
-});
+// ✅ FIX: Warn clearly in development if Redis is not configured
+if (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL) {
+  console.warn('[rate-limit] WARNING: REDIS_URL not set. Rate limiting is using in-memory store — NOT suitable for production with multiple instances.');
+}
+
+let redis: Redis | null = null;
+if (process.env.REDIS_URL && process.env.REDIS_TOKEN) {
+  redis = new Redis({
+    url: process.env.REDIS_URL,
+    token: process.env.REDIS_TOKEN,
+  });
+}
 
 interface RateLimitOptions {
   max: number;
-  window: number; // in seconds
+  window: number; // seconds
 }
 
 interface RateLimitResult {
@@ -19,25 +25,57 @@ interface RateLimitResult {
   reset: number;
 }
 
-const memoryStore = new Map<string, { count: number; reset: number }>();
+// ✅ FIX: Add TTL-based cleanup for memory store to prevent memory leaks
+class MemoryStore {
+  private store = new Map<string, { count: number; reset: number }>();
+  private cleanupInterval: NodeJS.Timeout;
+
+  constructor() {
+    // Clean up expired entries every 5 minutes
+    this.cleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [key, value] of this.store.entries()) {
+        if (now > value.reset) this.store.delete(key);
+      }
+    }, 5 * 60 * 1000);
+  }
+
+  get(key: string) { return this.store.get(key); }
+  set(key: string, value: { count: number; reset: number }) { this.store.set(key, value); }
+  delete(key: string) { this.store.delete(key); }
+}
+
+const memoryStore = new MemoryStore();
+
+// ✅ FIX: Use X-Real-IP as fallback chain and hash it to avoid storing raw IPs
+function getClientKey(req: NextRequest, pathname: string): string {
+  const ip =
+    req.headers.get('x-real-ip') ||
+    req.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
+    'unknown';
+  // Don't log raw IPs — use a hash for privacy
+  const { createHash } = require('crypto');
+  const ipHash = createHash('sha256').update(ip + (process.env.JWT_SECRET || '')).digest('hex').slice(0, 16);
+  return `rl:${ipHash}:${pathname}`;
+}
 
 export async function rateLimit(
   req: NextRequest,
   options: RateLimitOptions
 ): Promise<RateLimitResult> {
-  const key = `rate-limit:${req.ip || 'unknown'}:${req.nextUrl.pathname}`;
+  const key = getClientKey(req, req.nextUrl.pathname);
   const now = Date.now();
   const windowMs = options.window * 1000;
 
   try {
-    // Try Redis first, fallback to memory
-    if (process.env.REDIS_URL) {
+    if (redis) {
+      // Redis-backed rate limiting (production)
       const current = await redis.get<{ count: number; reset: number }>(key);
-      
+
       if (!current || now > current.reset) {
-        const newEntry = { count: 1, reset: now + windowMs };
-        await redis.set(key, newEntry, { ex: options.window });
-        return { success: true, remaining: options.max - 1, reset: newEntry.reset };
+        const entry = { count: 1, reset: now + windowMs };
+        await redis.set(key, entry, { ex: options.window });
+        return { success: true, remaining: options.max - 1, reset: entry.reset };
       }
 
       if (current.count >= options.max) {
@@ -49,14 +87,13 @@ export async function rateLimit(
       return { success: true, remaining: options.max - updated.count, reset: updated.reset };
     }
 
-    // In-memory fallback
+    // In-memory fallback (development only)
     const current = memoryStore.get(key);
 
     if (!current || now > current.reset) {
-      const newEntry = { count: 1, reset: now + windowMs };
-      memoryStore.set(key, newEntry);
-      setTimeout(() => memoryStore.delete(key), windowMs);
-      return { success: true, remaining: options.max - 1, reset: newEntry.reset };
+      const entry = { count: 1, reset: now + windowMs };
+      memoryStore.set(key, entry);
+      return { success: true, remaining: options.max - 1, reset: entry.reset };
     }
 
     if (current.count >= options.max) {
@@ -66,8 +103,12 @@ export async function rateLimit(
     current.count++;
     return { success: true, remaining: options.max - current.count, reset: current.reset };
   } catch (error) {
-    // If rate limiting fails, allow the request
-    console.error('Rate limit error:', error);
-    return { success: true, remaining: options.max, reset: now + windowMs };
+    // ✅ FIX: On Redis failure, BLOCK requests rather than silently allow (fail-secure)
+    //    Change to 'allow' in development if this causes issues during local testing
+    console.error('[rate-limit] Error:', error);
+    if (process.env.NODE_ENV === 'development') {
+      return { success: true, remaining: options.max, reset: now + windowMs };
+    }
+    return { success: false, remaining: 0, reset: now + windowMs };
   }
 }

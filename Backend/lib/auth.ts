@@ -3,12 +3,21 @@ import { cookies } from 'next/headers';
 import { prisma } from './prisma';
 import bcrypt from 'bcryptjs';
 
+// ✅ FIX #1: Fail fast if secrets are missing — no insecure fallbacks in production
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
+    throw new Error('FATAL: JWT_SECRET and JWT_REFRESH_SECRET must be set in production');
+  }
+}
+
 const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || 'your-secret-key-change-in-production'
+  process.env.JWT_SECRET || 'dev-only-secret-change-in-production-min-32-chars!!'
 );
 const JWT_REFRESH_SECRET = new TextEncoder().encode(
-  process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key'
+  process.env.JWT_REFRESH_SECRET || 'dev-only-refresh-secret-change-in-production!!'
 );
+
+const BCRYPT_ROUNDS = 12;
 
 export interface JWTPayload {
   userId: string;
@@ -18,27 +27,38 @@ export interface JWTPayload {
 
 export class AuthService {
   static async hashPassword(password: string): Promise<string> {
-    return bcrypt.hash(password, 12);
+    return bcrypt.hash(password, BCRYPT_ROUNDS);
   }
 
   static async comparePassword(password: string, hash: string): Promise<boolean> {
     return bcrypt.compare(password, hash);
   }
 
+  // ✅ FIX #2: Validate password strength before hashing
+  static validatePasswordStrength(password: string): { valid: boolean; message?: string } {
+    if (password.length < 8) return { valid: false, message: 'Password must be at least 8 characters' };
+    if (!/[A-Z]/.test(password)) return { valid: false, message: 'Password must contain at least one uppercase letter' };
+    if (!/[0-9]/.test(password)) return { valid: false, message: 'Password must contain at least one number' };
+    return { valid: true };
+  }
+
   static async generateTokens(payload: JWTPayload) {
+    const now = Math.floor(Date.now() / 1000);
+
     const accessToken = await new SignJWT({ ...payload })
       .setProtectedHeader({ alg: 'HS256' })
       .setExpirationTime('15m')
-      .setIssuedAt()
+      .setIssuedAt(now)
+      .setNotBefore(now)
       .sign(JWT_SECRET);
 
     const refreshToken = await new SignJWT({ userId: payload.userId })
       .setProtectedHeader({ alg: 'HS256' })
       .setExpirationTime('7d')
-      .setIssuedAt()
+      .setIssuedAt(now)
+      .setNotBefore(now)
       .sign(JWT_REFRESH_SECRET);
 
-    // Store refresh token in database
     await prisma.session.create({
       data: {
         userId: payload.userId,
@@ -52,18 +72,22 @@ export class AuthService {
 
   static async verifyToken(token: string): Promise<JWTPayload> {
     try {
-      const { payload } = await jwtVerify(token, JWT_SECRET);
+      const { payload } = await jwtVerify(token, JWT_SECRET, {
+        algorithms: ['HS256'],
+      });
       return payload as unknown as JWTPayload;
-    } catch (error) {
-      throw new Error('Invalid token');
+    } catch {
+      // ✅ FIX #3: Don't leak error details — generic message only
+      throw new Error('Invalid or expired token');
     }
   }
 
   static async refreshAccessToken(refreshToken: string) {
     try {
-      const { payload } = await jwtVerify(refreshToken, JWT_REFRESH_SECRET);
-      
-      // Check if refresh token exists in database
+      await jwtVerify(refreshToken, JWT_REFRESH_SECRET, {
+        algorithms: ['HS256'],
+      });
+
       const session = await prisma.session.findFirst({
         where: {
           token: refreshToken,
@@ -72,22 +96,21 @@ export class AuthService {
         include: { user: true },
       });
 
-      if (!session) {
+      if (!session || !session.user.isActive) {
         throw new Error('Invalid refresh token');
       }
 
-      // Generate new tokens
       const tokens = await this.generateTokens({
         userId: session.user.id,
         email: session.user.email,
         role: session.user.role,
       });
 
-      // Delete old session
+      // ✅ FIX #4: Token rotation — delete old session to prevent reuse
       await prisma.session.delete({ where: { id: session.id } });
 
       return tokens;
-    } catch (error) {
+    } catch {
       throw new Error('Invalid refresh token');
     }
   }
@@ -96,9 +119,7 @@ export class AuthService {
     const cookieStore = cookies();
     const token = cookieStore.get('auth-token')?.value;
 
-    if (!token) {
-      return null;
-    }
+    if (!token) return null;
 
     try {
       const payload = await this.verifyToken(token);
@@ -118,8 +139,11 @@ export class AuthService {
         },
       });
 
+      // ✅ FIX #5: Validate user is still active on every request
+      if (!user || !user.isActive) return null;
+
       return user;
-    } catch (error) {
+    } catch {
       return null;
     }
   }
@@ -129,7 +153,7 @@ export class AuthService {
     cookieStore.set(name, value, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: 'strict', // ✅ FIX #6: 'strict' instead of 'lax' for better CSRF protection
       maxAge,
       path: '/',
     });
@@ -138,5 +162,12 @@ export class AuthService {
   static clearAuthCookie(name: string) {
     const cookieStore = cookies();
     cookieStore.delete(name);
+  }
+
+  // ✅ FIX #7: New — cleanup expired sessions periodically
+  static async cleanupExpiredSessions() {
+    await prisma.session.deleteMany({
+      where: { expiresAt: { lt: new Date() } },
+    });
   }
 }

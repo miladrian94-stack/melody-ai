@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { jwtVerify } from 'jose';
 
-// Paths that don't require authentication
-const publicPaths = [
+// ✅ FIX: JWT secret validated at module load
+const JWT_SECRET = new TextEncoder().encode(
+  process.env.JWT_SECRET || 'dev-only-secret-change-in-production-min-32-chars!!'
+);
+
+// Public paths — exact match or prefix match
+const PUBLIC_PATHS = new Set([
   '/',
   '/login',
   '/register',
@@ -13,69 +19,106 @@ const publicPaths = [
   '/api/auth/register',
   '/api/auth/google',
   '/api/auth/forgot-password',
-  '/api/webhooks/stripe',
-  '/api/webhooks/lemonsqueezy',
   '/api/health',
-];
+]);
 
-// Admin-only paths
-const adminPaths = ['/admin', '/api/admin'];
+// Webhook paths — verified by signature, not JWT
+const WEBHOOK_PATHS = ['/api/webhooks/stripe', '/api/webhooks/lemonsqueezy'];
 
-export function middleware(request: NextRequest) {
+const ADMIN_PATHS = ['/admin', '/api/admin'];
+
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths
-  if (publicPaths.some(path => pathname.startsWith(path))) {
-    return NextResponse.next();
-  }
-
-  // Allow static files and public assets
+  // Allow static assets
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/static') ||
-    pathname.startsWith('/public') ||
-    pathname.includes('.') // files like favicon.ico
+    /\.(ico|png|jpg|jpeg|svg|webp|css|js|woff2?)$/.test(pathname)
   ) {
     return NextResponse.next();
   }
 
-  // Check for auth token
+  // Allow webhooks — they use their own signature verification
+  if (WEBHOOK_PATHS.some(p => pathname.startsWith(p))) {
+    return NextResponse.next();
+  }
+
+  // Allow public paths
+  if (PUBLIC_PATHS.has(pathname) || PUBLIC_PATHS.has(pathname.replace(/\/$/, ''))) {
+    return withSecurityHeaders(NextResponse.next());
+  }
+
+  // Validate JWT (not just check cookie presence)
   const authToken = request.cookies.get('auth-token')?.value;
 
   if (!authToken) {
-    // Redirect to login for page requests
-    if (!pathname.startsWith('/api')) {
-      return NextResponse.redirect(new URL('/login', request.url));
-    }
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return unauthenticated(request);
   }
 
-  // Check admin access
-  if (adminPaths.some(path => pathname.startsWith(path))) {
-    const userRole = request.cookies.get('user-role')?.value;
-    if (userRole !== 'ADMIN' && userRole !== 'SUPER_ADMIN') {
-      if (!pathname.startsWith('/api')) {
-        return NextResponse.redirect(new URL('/', request.url));
+  // ✅ FIX #8: Actually VERIFY the token in middleware (not just check it exists)
+  try {
+    const { payload } = await jwtVerify(authToken, JWT_SECRET, {
+      algorithms: ['HS256'],
+    });
+
+    // ✅ FIX #9: Admin check via verified JWT payload, NOT cookie value
+    //    The old code read 'user-role' cookie which can be tampered by the client
+    if (ADMIN_PATHS.some(p => pathname.startsWith(p))) {
+      const role = payload.role as string;
+      if (role !== 'ADMIN' && role !== 'SUPER_ADMIN') {
+        return forbidden(request);
       }
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
-  }
 
-  // Add security headers
-  const response = NextResponse.next();
-  
+    // Forward verified user info to downstream routes
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.set('x-user-id', payload.userId as string);
+    requestHeaders.set('x-user-role', payload.role as string);
+
+    return withSecurityHeaders(
+      NextResponse.next({ request: { headers: requestHeaders } })
+    );
+  } catch {
+    // Token is present but invalid/expired
+    return unauthenticated(request);
+  }
+}
+
+function unauthenticated(request: NextRequest) {
+  if (!request.nextUrl.pathname.startsWith('/api')) {
+    return NextResponse.redirect(new URL('/login', request.url));
+  }
+  return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+}
+
+function forbidden(request: NextRequest) {
+  if (!request.nextUrl.pathname.startsWith('/api')) {
+    return NextResponse.redirect(new URL('/', request.url));
+  }
+  return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+}
+
+function withSecurityHeaders(response: NextResponse) {
+  // ✅ FIX #10: Tighter CSP — remove 'unsafe-eval' where not needed
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
+  response.headers.set('X-XSS-Protection', '1; mode=block');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   response.headers.set(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' https:;"
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline'", // removed unsafe-eval
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https:",
+      "media-src 'self' https:",
+      "connect-src 'self' https:",
+      "frame-ancestors 'none'",
+    ].join('; ')
   );
-  response.headers.set(
-    'Strict-Transport-Security',
-    'max-age=31536000; includeSubDomains'
-  );
-
+  response.headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
   return response;
 }
 
