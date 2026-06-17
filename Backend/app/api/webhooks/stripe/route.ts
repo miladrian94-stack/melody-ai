@@ -29,6 +29,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
     }
 
+    // Enterprise idempotency: store every Stripe event once before processing.
+    const savedEvent = await prisma.webhookEvent.upsert({
+      where: { eventId: event.id },
+      create: { provider: 'stripe', eventId: event.id, type: event.type, payload: event as any },
+      update: {},
+    });
+
+    if (savedEvent.processed) {
+      return NextResponse.json({ received: true, duplicate: true });
+    }
+
     // Handle events
     switch (event.type) {
       case 'checkout.session.completed': {
@@ -62,6 +73,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    await prisma.webhookEvent.update({
+      where: { eventId: event.id },
+      data: { processed: true, processedAt: new Date() },
+    });
+
     return NextResponse.json({ received: true });
   } catch (error) {
     console.error('Webhook error:', error);
@@ -75,12 +91,13 @@ export async function POST(req: NextRequest) {
 async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
   const userId = session.client_reference_id;
   const tier = session.metadata?.tier || 'STARTER';
+  const organizationId = session.metadata?.organizationId || undefined;
 
   if (!userId) return;
 
   // Create or update subscription
   const existingSub = await prisma.subscription.findFirst({
-    where: { userId, status: 'active' },
+    where: { userId, organizationId, status: 'active' },
   });
 
   if (existingSub) {
@@ -93,6 +110,7 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
   await prisma.subscription.create({
     data: {
       userId,
+      organizationId,
       tier: tier as any,
       status: 'active',
       currentPeriodStart: new Date(),
@@ -102,19 +120,24 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
     },
   });
 
-  // Update user tier and credits
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      tier: tier as any,
-      credits: getCreditsForTier(tier),
-    },
-  });
+  // Update subscription owner and credits. Organization subscriptions are credited to the workspace.
+  if (organizationId) {
+    await prisma.organization.update({
+      where: { id: organizationId },
+      data: { plan: tier as any, credits: { increment: getCreditsForTier(tier) } },
+    });
+  } else {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { tier: tier as any, credits: { increment: getCreditsForTier(tier) } },
+    });
+  }
 
   // Log payment
   await prisma.payment.create({
     data: {
       userId,
+      organizationId,
       amount: session.amount_total ? session.amount_total / 100 : 0,
       currency: session.currency || 'USD',
       status: 'completed',

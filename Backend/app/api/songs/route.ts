@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { AuthService } from '@/lib/auth';
 import { z } from 'zod';
 import { SongStatus } from '@prisma/client';
+import { EnterpriseSongService } from '@/Backend/enterprise/services/enterprise-song.service';
 
 const createSongSchema = z.object({
   title: z.string().min(1).max(200),
@@ -96,13 +97,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Check credits
-    if (user.credits <= 0) {
-      return NextResponse.json(
-        { error: 'Insufficient credits. Please upgrade your plan.' },
-        { status: 402 }
-      );
-    }
+    const organizationId = req.headers.get('x-organization-id') || undefined;
 
     const body = await req.json();
     const validation = createSongSchema.safeParse(body);
@@ -116,39 +111,32 @@ export async function POST(req: NextRequest) {
 
     const { title, lyrics, genre, mood, language, voiceType, duration } = validation.data;
 
-    // Create song
-    const song = await prisma.song.create({
-      data: {
-        userId: user.id,
-        title,
-        lyrics,
-        genre,
-        mood,
-        language,
-        voiceType,
-        duration,
-        status: 'PENDING',
-      },
+    const result = await EnterpriseSongService.createQueuedSong({
+      userId: user.id,
+      organizationId,
+      title,
+      lyrics,
+      genre,
+      mood,
+      language,
+      voiceType,
+      duration,
     });
-
-    // Deduct credits
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { credits: { decrement: 1 } },
-    });
-
-    // Add to processing queue (will be processed by worker)
-    // For now, we'll simulate with a placeholder
-    // In production, this would be handled by BullMQ worker
 
     return NextResponse.json({
       song: {
-        id: song.id,
-        title: song.title,
-        status: song.status,
-        createdAt: song.createdAt,
+        id: result.song.id,
+        title: result.song.title,
+        status: result.song.status,
+        createdAt: result.song.createdAt,
       },
-      message: 'Song created successfully and queued for processing',
+      aiJob: {
+        id: result.aiJob.id,
+        status: result.aiJob.status,
+        progress: result.aiJob.progress,
+      },
+      cost: result.cost,
+      message: 'Song created, credits deducted, and AI job queued for processing',
     }, { status: 201 });
   } catch (error) {
     console.error('Create song error:', error);

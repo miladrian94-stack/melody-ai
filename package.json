@@ -17,7 +17,10 @@
     "docker:build": "docker compose build",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
-    "health": "tsx scripts/health-check.ts"
+    "health": "tsx scripts/health-check.ts",
+    "worker:enterprise": "tsx workers/enterprise-ai-worker.ts",
+    "db:validate": "prisma validate",
+    "enterprise:check": "npm run db:validate && npm run type-check"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.500.0",

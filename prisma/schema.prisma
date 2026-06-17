@@ -61,6 +61,38 @@ enum VoiceType {
   FEMALE
 }
 
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+  BILLING
+  VIEWER
+}
+
+enum CreditTransactionType {
+  GRANT
+  PURCHASE
+  USAGE
+  REFUND
+  ADJUSTMENT
+}
+
+enum AIJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum FeatureFlagScope {
+  GLOBAL
+  ORGANIZATION
+  USER
+  PLAN
+}
+
 model User {
   id                  String             @id @default(uuid())
   email               String             @unique
@@ -84,6 +116,11 @@ model User {
   apiKeys             ApiKey[]
   sessions            Session[]
   auditLogs           AuditLog[]
+  ownedOrganizations  Organization[]      @relation("OrganizationOwner")
+  organizationMemberships OrganizationMember[]
+  creditLedger        CreditLedger[]
+  aiJobs              AIJob[]
+  usageMetrics        UsageMetric[]
 
   @@index([email])
   @@index([role])
@@ -109,6 +146,7 @@ model Session {
 model Song {
   id            String      @id @default(uuid())
   userId        String
+  organizationId  String?
   title         String
   lyrics        String?
   genre         Genre       @default(POP)
@@ -130,9 +168,12 @@ model Song {
   updatedAt     DateTime    @updatedAt
 
   user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization  Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   jobs          Job[]
+  aiJobs        AIJob[]
 
   @@index([userId])
+  @@index([organizationId])
   @@index([status])
   @@index([createdAt])
   @@map("songs")
@@ -163,6 +204,7 @@ model Job {
 model Subscription {
   id              String           @id @default(uuid())
   userId          String
+  organizationId  String?
   tier            SubscriptionTier
   status          String           @default("active")
   currentPeriodStart DateTime
@@ -175,8 +217,10 @@ model Subscription {
   updatedAt       DateTime         @updatedAt
 
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization    Organization?     @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([organizationId])
   @@index([status])
   @@map("subscriptions")
 }
@@ -184,6 +228,7 @@ model Subscription {
 model Payment {
   id              String    @id @default(uuid())
   userId          String
+  organizationId  String?
   amount          Float
   currency        String    @default("USD")
   status          String
@@ -193,14 +238,17 @@ model Payment {
   createdAt       DateTime  @default(now())
 
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([organizationId])
   @@map("payments")
 }
 
 model ApiKey {
   id            String    @id @default(uuid())
   userId        String
+  organizationId String?
   name          String
   key           String    @unique
   lastUsedAt    DateTime?
@@ -210,8 +258,10 @@ model ApiKey {
   updatedAt     DateTime  @updatedAt
 
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization  Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   @@index([key])
+  @@index([organizationId])
   @@index([userId])
   @@map("api_keys")
 }
@@ -219,6 +269,7 @@ model ApiKey {
 model AuditLog {
   id            String    @id @default(uuid())
   userId        String?
+  organizationId  String?
   action        String
   entity        String?
   entityId      String?
@@ -228,9 +279,173 @@ model AuditLog {
   createdAt     DateTime  @default(now())
 
   user          User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization  Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([organizationId])
   @@index([action])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+
+model Organization {
+  id            String    @id @default(uuid())
+  name          String
+  slug          String    @unique
+  ownerId       String
+  plan          SubscriptionTier @default(FREE)
+  credits       Int       @default(100)
+  isActive      Boolean   @default(true)
+  settings      Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  owner         User      @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members       OrganizationMember[]
+  songs         Song[]
+  subscriptions Subscription[]
+  payments      Payment[]
+  apiKeys       ApiKey[]
+  auditLogs     AuditLog[]
+  creditLedger  CreditLedger[]
+  aiJobs        AIJob[]
+  featureFlags  FeatureFlag[]
+  usageMetrics  UsageMetric[]
+
+  @@index([ownerId])
+  @@index([slug])
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id              String           @id @default(uuid())
+  userId          String
+  organizationId  String
+  role            OrganizationRole @default(MEMBER)
+  invitedBy       String?
+  joinedAt        DateTime         @default(now())
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("organization_members")
+}
+
+model CreditLedger {
+  id              String                @id @default(uuid())
+  userId          String?
+  organizationId  String?
+  type            CreditTransactionType
+  amount          Int
+  balanceAfter    Int
+  reason          String
+  referenceType   String?
+  referenceId     String?
+  metadata        Json?
+  createdAt       DateTime              @default(now())
+
+  user            User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization    Organization?         @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("credit_ledger")
+}
+
+model AIJob {
+  id              String       @id @default(uuid())
+  userId          String
+  organizationId  String?
+  songId          String?
+  type            String       @default("song_generation")
+  status          AIJobStatus  @default(QUEUED)
+  progress        Int          @default(0)
+  prompt          String?
+  input           Json?
+  output          Json?
+  error           String?
+  attempts        Int          @default(0)
+  maxAttempts     Int          @default(3)
+  queuedAt        DateTime     @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  song            Song?        @relation(fields: [songId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("ai_jobs")
+}
+
+model FeatureFlag {
+  id              String           @id @default(uuid())
+  key             String
+  name            String
+  description     String?
+  enabled         Boolean          @default(false)
+  scope           FeatureFlagScope @default(GLOBAL)
+  organizationId  String?
+  plan            SubscriptionTier?
+  rolloutPercent  Int              @default(100)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  organization    Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([key, organizationId, plan])
+  @@index([key])
+  @@index([organizationId])
+  @@map("feature_flags")
+}
+
+model UsageMetric {
+  id              String    @id @default(uuid())
+  userId          String?
+  organizationId  String?
+  metric          String
+  value           Float
+  unit            String?
+  metadata        Json?
+  occurredAt      DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+
+  user            User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization    Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([metric])
+  @@index([occurredAt])
+  @@map("usage_metrics")
+}
+
+model WebhookEvent {
+  id              String    @id @default(uuid())
+  provider        String
+  eventId         String    @unique
+  type            String
+  payload         Json
+  processed       Boolean   @default(false)
+  processedAt     DateTime?
+  error           String?
+  createdAt       DateTime  @default(now())
+
+  @@index([provider])
+  @@index([type])
+  @@index([processed])
+  @@map("webhook_events")
 }
