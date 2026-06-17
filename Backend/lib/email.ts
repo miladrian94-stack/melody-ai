@@ -109,13 +109,9 @@ export const sendWelcomeEmail = async (email: string, name: string) => {
   });
 };
 
-export async function sendResetPasswordEmail(
+export const sendResetPasswordEmail = async (
   email: string,
   resetUrl: string
-) {
-  console.log("Password reset email:", { email, resetUrl });
-
-  return {
-    success: true,
-  };
-}
+) => {
+  return sendPasswordResetEmail(email, resetUrl);
+};
