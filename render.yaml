@@ -17,7 +17,9 @@ services:
           name: melody-ai-redis
           type: redis
           property: connectionString
-      - key: JWT_SECRET
+           - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
         generateValue: true
       - key: NEXTAUTH_SECRET
         generateValue: true
