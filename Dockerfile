@@ -15,6 +15,7 @@ COPY --from=deps /app/node_modules ./node_modules
 
 COPY Backend/app ./app
 COPY Backend/config ./config
+COPY Backend/components ./components
 COPY Backend/lib ./lib
 COPY Backend/middleware ./middleware
 COPY Backend/services ./services
@@ -23,6 +24,7 @@ COPY package.json ./
 COPY next.config.js ./
 COPY tsconfig.json ./
 
+RUN mkdir -p public
 RUN npx prisma generate --schema=./prisma/schema.prisma
 RUN npm run build
 

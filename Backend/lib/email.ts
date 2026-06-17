@@ -109,6 +109,7 @@ export const sendWelcomeEmail = async (email: string, name: string) => {
   });
 };
 
+
 export const sendResetPasswordEmail = async (
   email: string,
   resetUrl: string
