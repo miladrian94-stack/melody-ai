@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
         lastLoginAt: true,
         createdAt: true,
         updatedAt: true,
-        subscription: {
+        subscriptions: {
           select: {
             tier: true,
             status: true,
@@ -55,7 +55,14 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ user: profile });
+    const normalizedProfile = profile
+      ? {
+          ...profile,
+          subscription: profile.subscriptions?.[0] || null,
+        }
+      : null;
+
+    return NextResponse.json({ user: normalizedProfile });
   } catch (error) {
     console.error('Get profile error:', error);
     return NextResponse.json(
