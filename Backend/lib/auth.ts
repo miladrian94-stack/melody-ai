@@ -3,18 +3,30 @@ import { cookies } from 'next/headers';
 import { prisma } from './prisma';
 import bcrypt from 'bcryptjs';
 
-// ✅ FIX #1: Fail fast if secrets are missing — no insecure fallbacks in production
-if (process.env.NODE_ENV === 'production') {
-  if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
+const isBuildTime =
+  process.env.NEXT_PHASE === 'phase-production-build' ||
+  process.env.npm_lifecycle_event === 'build';
+
+const jwtSecretValue =
+  process.env.JWT_SECRET ||
+  (isBuildTime ? 'build-time-secret-change-after-build-min-32-chars!!' : undefined);
+
+const jwtRefreshSecretValue =
+  process.env.JWT_REFRESH_SECRET ||
+  (isBuildTime ? 'build-time-refresh-secret-change-after-build-min-32-chars!!' : undefined);
+
+if (process.env.NODE_ENV === 'production' && !isBuildTime) {
+  if (!jwtSecretValue || !jwtRefreshSecretValue) {
     throw new Error('FATAL: JWT_SECRET and JWT_REFRESH_SECRET must be set in production');
   }
 }
 
 const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || 'dev-only-secret-change-in-production-min-32-chars!!'
+  jwtSecretValue || 'dev-only-secret-change-in-production-min-32-chars!!'
 );
+
 const JWT_REFRESH_SECRET = new TextEncoder().encode(
-  process.env.JWT_REFRESH_SECRET || 'dev-only-refresh-secret-change-in-production!!'
+  jwtRefreshSecretValue || 'dev-only-refresh-secret-change-in-production!!'
 );
 
 const BCRYPT_ROUNDS = 12;
