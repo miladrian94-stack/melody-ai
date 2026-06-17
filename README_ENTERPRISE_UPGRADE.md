@@ -54,3 +54,6 @@ npm run worker:enterprise
 - مسار `POST /api/songs` أصبح يستخدم EnterpriseSongService: ينشئ Song + AIJob + يخصم Credits + يرسل Job إلى Queue.
 - Stripe webhook أصبح يحفظ الأحداث في `WebhookEvent` لمنع تكرار المعالجة.
 - يلزم تنفيذ migration/DB push بعد تحديث Prisma schema.
+
+## Build path fix
+This package includes a Dockerfile fix that copies `Backend/enterprise` into the Docker build context. It also includes a compatibility mirror under `Backend/lib/enterprise` so imports using either `@/Backend/enterprise/...` or `@/lib/enterprise/...` can resolve during Docker builds.

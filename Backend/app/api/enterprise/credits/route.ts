@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { ok, fail } from '@/Backend/enterprise/core/api-response';
-import { AppError } from '@/lib/enterprise/core/errors'
+import { AppError } from '@/Backend/enterprise/core/errors';
 import { requireTenant } from '@/Backend/enterprise/guards/tenant';
 import { CreditsService } from '@/Backend/enterprise/services/credits.service';
 

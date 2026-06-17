@@ -19,6 +19,7 @@ COPY Backend/components ./components
 COPY Backend/lib ./lib
 COPY Backend/middleware ./middleware
 COPY Backend/services ./services
+COPY Backend/enterprise ./Backend/enterprise
 COPY prisma ./prisma
 COPY package.json ./
 COPY next.config.js ./
