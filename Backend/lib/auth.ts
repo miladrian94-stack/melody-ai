@@ -1,5 +1,5 @@
 import { SignJWT, jwtVerify } from 'jose';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { prisma } from './prisma';
 import bcrypt from 'bcryptjs';
 
@@ -129,7 +129,10 @@ export class AuthService {
 
   static async getCurrentUser() {
     const cookieStore = cookies();
-    const token = cookieStore.get('auth-token')?.value;
+    const headerStore = headers();
+    const authHeader = headerStore.get('authorization') || headerStore.get('Authorization');
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    const token = bearerToken || cookieStore.get('auth-token')?.value;
 
     if (!token) return null;
 

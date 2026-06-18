@@ -102,6 +102,7 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json({
+      accessToken: tokens.accessToken,
       user: {
         id: user.id,
         email: user.email,
