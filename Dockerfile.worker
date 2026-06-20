@@ -1,0 +1,64 @@
+# Dockerfile.worker — Worker Container Build
+#
+# THIS FILE DID NOT EXIST BEFORE THIS REFACTOR. docker-compose.yml's
+# `worker` service references `dockerfile: Dockerfile.worker`, but no such
+# file was present anywhere in the project — meaning `docker compose up`
+# would fail at the worker service's build step with a
+# "Dockerfile.worker: no such file or directory" error. The worker has
+# likely never successfully run via this docker-compose setup.
+#
+# This builds and runs workers/ai-generation.worker.ts (the rewritten
+# worker entrypoint — see that file's header comment for what it replaces).
+
+# syntax=docker.io/docker/dockerfile:1
+
+FROM node:20-alpine AS deps
+RUN apk add --no-cache libc6-compat openssl
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm install --legacy-peer-deps
+
+FROM node:20-alpine AS builder
+RUN apk add --no-cache openssl
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+
+# Same fix as the main Dockerfile: copy the whole Backend/ tree preserving
+# its prefix, plus the flattened lib/ that worker code imports via
+# `@/lib/...`, plus the worker entrypoints themselves and Prisma schema.
+COPY Backend ./Backend
+COPY Backend/lib ./lib
+COPY workers ./workers
+COPY prisma ./prisma
+COPY package.json ./
+COPY tsconfig.json ./
+
+RUN npx prisma generate --schema=./prisma/schema.prisma
+
+FROM node:20-alpine AS runner
+RUN apk add --no-cache openssl
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/Backend ./Backend
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/workers ./workers
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/tsconfig.json ./
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+
+USER nextjs
+
+# No EXPOSE — the worker makes outbound connections (Redis, Postgres, S3,
+# the AI provider) and never listens for inbound traffic.
+
+CMD ["npx", "tsx", "workers/ai-generation.worker.ts"]
